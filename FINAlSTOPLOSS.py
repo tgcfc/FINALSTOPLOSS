@@ -1,3 +1,4 @@
+print("GitHub")
 import sys
 import random
 import string
