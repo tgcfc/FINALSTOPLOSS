@@ -58,6 +58,8 @@ def comprar_btc():
                 btc_price_temp = float(ticker_temp["price"])
                 if btc_price_temp > ultimo_precio_venta:
                     print("Restricción de recompra: han pasado menos de 20 min y el precio está por encima de la última venta. Se bloquea la compra.")
+                    global en_dolares
+                    en_dolares = True
                     return
 
         # --- CÓDIGO ORIGINAL (NO SE MODIFICA) ---
