@@ -36,10 +36,8 @@ client = Client(API_KEY, API_SECRET)
 COPY_API_KEY = "Xb4SIWG5FzQR5fAzTcRigalhughRm5u3uovVCWSidOIcMzpV78KXXO7hezrY53Hq"
 COPY_API_SECRET = "yBbmeWOjc70SbGwNYcNuspnUw5gMfe7uIKmd9eO1N5EvIejhLz0x4W9ezci0RXqT"
 client_lead = Client(COPY_API_KEY, COPY_API_SECRET)
-# Nuevas claves API para el líder de trading
 COPY_API_KEY = "Xb4SIWG5FzQR5fAzTcRigalhughRm5u3uovVCWSidOIcMzpV78KXXO7hezrY53Hq"
 COPY_API_SECRET = "yBbmeWOjc70SbGwNYcNuspnUw5gMfe7uIKmd9eO1N5EvIejhLz0x4W9ezci0RXqT"
-# Inicializar el cliente de Binance con las nuevas claves
 client = Client(COPY_API_KEY, COPY_API_SECRET)
 
 def comprar_btc():
@@ -119,7 +117,6 @@ def comprar_btc():
 
         except Exception as e:
             print(f"Error al comprar BTC: {e}")
-            # [NUEVO] Si hubo error, NO cambiamos variables ni estados (evita fallo por compra no ejecutada)
             return
 
         print(f"Orden de compra ejecutada (Spot principal): {order}")
@@ -243,6 +240,7 @@ def vender_btc():
     except Exception as e:
         print(f"Error al vender BTC: {e}")
 
+# Función para obtener el precio de Bitcoin
 def obtener_precio_bitcoin():
     try:
         exchange = ccxt.binance()
@@ -280,7 +278,6 @@ def obtener_indicadores(exchange, symbol='BTC/USDT', timeframe='1m', limit=60):
         st = ta.supertrend(df['high'], df['low'], df['close'], length=10, multiplier=3)
         direction_cols = [col for col in st.columns if col.startswith('SUPERTd')]
         if len(direction_cols) == 0:
-            # print("  [DEBUG] No se encontró columna SUPERTd_ en SuperTrend.")
             return None
 
         direction_col = direction_cols[0]
@@ -290,9 +287,110 @@ def obtener_indicadores(exchange, symbol='BTC/USDT', timeframe='1m', limit=60):
     except Exception:
         return None
 
-# ... aquí continúan todas tus funciones auxiliares: verificar_tendencia_largo_plazo, supertrend_bajista, evitar_caida, verificar_tendencia_mediano_plazo, etc. ... 
-# NO SE OMITEN, simplemente cópialas aquí tal como ya las tienes arriba
+# --------------------------------------------------------------------------------
+# Verificación de tendencia a más largo plazo (1h)
+# --------------------------------------------------------------------------------
+def verificar_tendencia_largo_plazo(exchange, symbol='BTC/USDT', timeframe='1h', limit=100):
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 
+        if len(df) < 50:
+            return False
+
+        df['ma_50'] = ta.sma(df['close'], length=50).fillna(method='bfill')
+        df['rsi_14'] = ta.rsi(df['close'], length=14).fillna(method='bfill')
+
+        precio_actual = df['close'].iloc[-1]
+        ma_50_actual = df['ma_50'].iloc[-1]
+        rsi_14_actual = df['rsi_14'].iloc[-1]
+
+        # Señal bajista si está por debajo de la MA50 y RSI < 30
+        if precio_actual < ma_50_actual and rsi_14_actual < 30:
+            return True
+        return False
+
+    except Exception:
+        return False
+
+# --------------------------------------------------------------------------------
+# Verificar SuperTrend bajista
+# --------------------------------------------------------------------------------
+def supertrend_bajista(df):
+    """
+    True si el SuperTrend indica señal bajista (dirección = -1).
+    """
+    try:
+        if 'supertrend_dir' not in df.columns:
+            return False
+        ultima_senal = df['supertrend_dir'].iloc[-1]
+        return (ultima_senal == -1)
+    except Exception:
+        return False
+
+# --------------------------------------------------------------------------------
+# Indicadores de corto plazo que aconsejan "evitar la compra"
+# --------------------------------------------------------------------------------
+def evitar_caida(df):
+    if df is None:
+        return True
+    try:
+        rsi_actual = df['rsi'].iloc[-1]
+        macd_actual = df['macd'].iloc[-1]
+        macd_signal_actual = df['macd_signal'].iloc[-1]
+        adx_actual = df['adx'].iloc[-1]
+
+        if pd.isna(rsi_actual) or pd.isna(macd_actual) or pd.isna(macd_signal_actual) or pd.isna(adx_actual):
+            return True
+
+        # Evitar RSI fuera de [30..70]
+        if not (30 < rsi_actual < 70):
+            return True
+
+        # MACD debe estar por encima de su señal
+        if macd_actual <= macd_signal_actual:
+            return True
+
+        # ADX mínimo para una tendencia "fuerte" (25)
+        if adx_actual < 25:
+            return True
+
+        return False
+    except Exception:
+        return True
+
+# --------------------------------------------------------------------------------
+# NUEVO: Verificación de "tendencia mediano plazo" en 15 minutos
+#       Requiere RSI>50 y MACD>señal, para mayor confirmación alcista
+# --------------------------------------------------------------------------------
+def verificar_tendencia_mediano_plazo(exchange, symbol='BTC/USDT', timeframe='15m', limit=60):
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+
+        if len(df) < 14:
+            return False
+
+        # RSI + MACD en 15m
+        df['rsi'] = ta.rsi(df['close'], length=14).fillna(method='bfill')
+        macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
+        df['macd'] = macd['MACD_12_26_9'].fillna(method='bfill')
+        df['macd_signal'] = macd['MACDs_12_26_9'].fillna(method='bfill')
+
+        rsi_15m = df['rsi'].iloc[-1]
+        macd_15m = df['macd'].iloc[-1]
+        macd_signal_15m = df['macd_signal'].iloc[-1]
+
+        # Requerimos RSI>50 y MACD>señal => "alcista"
+        if rsi_15m > 50 and macd_15m > macd_signal_15m:
+            return True
+        return False
+    except Exception:
+        return False
+
+# --------------------------------------------------------------------------------
 # [NUEVO] Filtro forecast usando polyfit
 def forecast_pendiente_alcista(exchange, symbol='BTC/USDT', timeframe='1m', minutos=180):
     """
@@ -301,21 +399,196 @@ def forecast_pendiente_alcista(exchange, symbol='BTC/USDT', timeframe='1m', minu
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=minutos)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        closes = df['close'].values
-        x = np.arange(len(closes))
-        coef = np.polyfit(x, closes, 1)
-        pendiente = coef[0]
-        print(f"[FORECAST] Pendiente (np.polyfit) últimas {minutos} min: {pendiente:.6f}")
-        return pendiente > 0
+        precios = df['close'].values
+        x = np.arange(len(precios))
+        pendiente, inter = np.polyfit(x, precios, 1)
+        print(f"[Forecast Polyfit] Pendiente: {pendiente:.6f}")
+        return pendiente >= 0
     except Exception as e:
-        print(f"Error forecast con polyfit: {e}")
+        print(f"[Forecast] Error calculando pendiente: {e}")
         return False
 
-# ... aquí continúa todo tu bloque de validaciones y filtros ...
-# (cópialas completas, igual que estaban en tu mensaje anterior)
+# --------------------------------------------------------------------------------
+# -------------------  AQUI COMIENZAN LAS NUEVAS FUNCIONES  ----------------------
+# (TODO el bloque de validaciones adicionales y checks, igual a tu código original)
+# --------------------------------------------------------------------------------
+
+CRYPTOPANIC_API_TOKEN = "37b99aaaf91a61655f4d64f82d16aeccfe7223b2"
+CRYPTOPANIC_ENDPOINT = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_API_TOKEN}&filter=negative,important"
+FEAR_GREED_ENDPOINT = "https://api.alternative.me/fng/"
+
+def check_noticias_negativas() -> bool:
+    try:
+        response = requests.get(CRYPTOPANIC_ENDPOINT, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            posts = data.get("results", [])
+            ahora = datetime.utcnow()
+            recientes = [
+                post for post in posts
+                if "published_at" in post and
+                (ahora - datetime.fromisoformat(post["published_at"][:-1])).total_seconds() <= 21600
+            ]
+            if len(recientes) >= 40:
+                print(f"Se encontraron {len(recientes)} noticias negativas recientes en CryptoPanic.")
+                return True
+            return False
+        else:
+            print(f"Error CryptoPanic: status {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"Error al consultar CryptoPanic: {e}")
+        return False
+
+def check_horarios_preferidos() -> bool:
+    ahora = datetime.now().hour
+    if 23 <= ahora or ahora < 1:
+        return False
+    return True
+
+def check_fear_and_greed() -> bool:
+    try:
+        r = requests.get(FEAR_GREED_ENDPOINT, timeout=10)
+        if r.status_code == 200:
+            fng_data = r.json()
+            fng_list = fng_data.get("data", [])
+            if not fng_list:
+                print("Sin datos Fear & Greed => Continuamos sin bloquear.")
+                return True
+            latest = fng_list[0]
+            fng_value_str = latest.get("value", "50")
+            fng_value = int(fng_value_str)
+            if fng_value < 20:
+                print(f"Fear & Greed Index muy bajo ({fng_value}) => Pánico extremo.")
+                return False
+            return True
+        else:
+            print(f"Error Fear & Greed Index: status {r.status_code}")
+            return True
+    except Exception as e:
+        print(f"Error al consultar Fear & Greed: {e}")
+        return True
+
+def check_atr_alto(exchange, symbol='BTC/USDT') -> bool:
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        if len(df) < 14:
+            return False
+
+        df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+        precio_actual = df['close'].iloc[-1]
+        atr_actual = df['atr'].iloc[-1]
+        umbral_atr = precio_actual * 0.005
+
+        if atr_actual > umbral_atr:
+            print(f"ATR = {atr_actual:.2f}, supera el umbral dinámico de {umbral_atr:.2f}")
+            return True
+        return False
+    except:
+        return False
+
+def check_volumen_bajo(exchange, symbol='BTC/USDT') -> bool:
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=10)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        avg_volume = df['volume'].mean()
+        if avg_volume < 50:
+            print("Volumen de negociación muy bajo => Bloquear compra.")
+            return True
+        return False
+    except:
+        return False
+
+def check_heikin_ashi(exchange, symbol='BTC/USDT', timeframe='15m', limit=30) -> bool:
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        ha_df = df.copy()
+        ha_df['HA_close'] = (df['open'] + df['high'] + df['low'] + df['close']) / 4
+        ha_df['HA_open'] = 0.0
+        for i in range(len(ha_df)):
+            if i == 0:
+                ha_df.at[i, 'HA_open'] = (df['open'].iloc[i] + df['close'].iloc[i]) / 2
+            else:
+                ha_df.at[i, 'HA_open'] = (ha_df.at[i-1, 'HA_open'] + ha_df.at[i-1, 'HA_close']) / 2
+
+        ha_df['HA_high'] = ha_df[['HA_open','HA_close','high']].max(axis=1)
+        ha_df['HA_low']  = ha_df[['HA_open','HA_close','low']].min(axis=1)
+        ultimas_velas = ha_df.tail(3)
+        todas_alcistas = all(ultimas_velas['HA_close'] > ultimas_velas['HA_open'])
+        if not todas_alcistas:
+            print("Heikin Ashi: Últimas velas no son completamente alcistas.")
+        return todas_alcistas
+    except:
+        return True
+
+def check_rsi_multiple_timeframes(exchange, symbol='BTC/USDT') -> bool:
+    timeframes = ['5m', '15m', '1h']
+    for tf in timeframes:
+        try:
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=30)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df['rsi'] = ta.rsi(df['close'], length=14).fillna(method='bfill')
+            rsi_ultima = df['rsi'].iloc[-1]
+            if rsi_ultima < 40:
+                print(f"RSI de {tf} = {rsi_ultima:.2f}, alarmista => Bloquear compra.")
+                return False
+        except Exception as e:
+            print(f"Error al calcular RSI en {tf}: {e}")
+            return False
+    return True
+
+def check_binance_24h_ticker() -> bool:
+    url = "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            cambio_24h = float(data["priceChangePercent"])
+            print(f"Variación 24h en Binance: {cambio_24h:.2f}%")
+            if abs(cambio_24h) > 10:
+                print("Cambio 24h excede ±10%, demasiada volatilidad => Bloquear compra.")
+                return False
+            return True
+        else:
+            print(f"Error consultando 24h ticker: {r.status_code}")
+            return True
+    except Exception as e:
+        print(f"Excepción en check_binance_24h_ticker: {e}")
+        return True
+
+def validacion_adicional(exchange) -> bool:
+    if check_noticias_negativas():
+        print("Alertas negativas en noticias => Bloquear compra.")
+        return False
+    if not check_horarios_preferidos():
+        print("Estamos en horario de alta volatilidad => Bloquear compra.")
+        return False
+    if not check_fear_and_greed():
+        print("Índice de Miedo & Avaricia muy bajo => Bloquear compra.")
+        return False
+    if check_atr_alto(exchange):
+        print("Volatilidad (ATR) demasiado alta => Bloquear compra.")
+        return False
+    if check_volumen_bajo(exchange):
+        return False
+    if not check_heikin_ashi(exchange):
+        print("Velas Heikin Ashi no confirman tendencia alcista => Bloquear compra.")
+        return False
+    if not check_rsi_multiple_timeframes(exchange):
+        print("RSI en múltiples marcos detecta condiciones muy adversas => Bloquear compra.")
+        return False
+    if not check_binance_24h_ticker():
+        print("Variación 24h en Binance demasiado alta => Bloquear compra.")
+        return False
+    return True
 
 # --------------------------------------------------------------------------------
-# Lógica principal (Código original, SIN CAMBIOS, salvo integración)
+# Lógica principal (Código original, SIN CAMBIOS, salvo integración y mejoras)
 # --------------------------------------------------------------------------------
 def main():
     exchange = ccxt.binance()
@@ -337,6 +610,7 @@ def main():
     compra_realizada = False
 
     global precio_stop_loss
+    global stop_loss_activado
 
     while True:
         try:
@@ -359,38 +633,24 @@ def main():
             tendencia_bajista_largo_plazo = verificar_tendencia_largo_plazo(exchange)
             supertrend_es_bajista = supertrend_bajista(df)
             indicadores_desfavorables = evitar_caida(df)
+
+            # NUEVO: Filtro mediano plazo (15m)
             tendencia_mediano_plazo_ok = verificar_tendencia_mediano_plazo(exchange)
 
-            # [NUEVO] STOP-LOSS: Si estamos en BTC, revisa si hay que ejecutar venta forzada
-            if not en_dolares and stop_loss_activado and precio_stop_loss is not None:
-                if precio_actual <= precio_stop_loss:
-                    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    print(f"[{now_str}] *** STOP-LOSS activado. VENTA FORZADA a ${precio_actual:.2f} ***")
-                    vender_btc()
-                    precioguardado = precio_actual
-                    en_dolares = True
-                    ultima_operacion = time.time()
-                    compra_realizada = False
-                    precio_stop_loss = None
-                    time.sleep(5)
-                    continue
+            # NUEVO: Filtro Forecast con polyfit (solo para compras)
+            forecast_ok = forecast_pendiente_alcista(exchange)
 
             if en_dolares:
-                # Condición de compra (original):
-                cond_1 = (precio_actual <= precio_inicial_usd * 0.995 -0.1) or (tiempo_en_usd >= 1800 and not indicadores_desfavorables)
+                cond_1 = (precio_actual <= precio_inicial_usd * 0.995 - 0.1) or (tiempo_en_usd >= 1800 and not indicadores_desfavorables)
                 cond_2 = not tendencia_bajista_largo_plazo
                 cond_3 = not supertrend_es_bajista
                 cond_4 = tendencia_mediano_plazo_ok
-
-                # [NUEVO] Filtro forecast
-                forecast_ok = forecast_pendiente_alcista(exchange)
 
                 if cond_1 and cond_2 and cond_3 and cond_4 and forecast_ok:
                     if validacion_adicional(exchange):
                         now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         print(f"[{now_str}] ** COMPRA de BTC a ${precio_actual:.2f} **")
                         comprar_btc()
-
                         precioguardado = precio_actual
                         en_dolares = False
                         ultima_operacion = time.time()
@@ -401,12 +661,22 @@ def main():
                     print("Forecast de tendencia lineal desaconseja la compra. Se omite la operación.")
 
             else:
+                # [NUEVO] STOP-LOSS: Venta inmediata si el precio cae por debajo del stop
+                if stop_loss_activado and precio_stop_loss is not None and precio_actual <= precio_stop_loss:
+                    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"[{now_str}] ** STOP-LOSS activado. VENTA de BTC a ${precio_actual:.2f} **")
+                    vender_btc()
+                    precioguardado = precio_actual
+                    en_dolares = True
+                    ultima_operacion = time.time()
+                    compra_realizada = False
+                    precio_stop_loss = None
+
                 # Lógica de venta (original)
-                if variacion >= 0.5:
+                elif variacion >= 0.5:
                     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     print(f"[{now_str}] ** El precio ha subido 0.5%. VENTA de BTC a ${precio_actual:.2f} **")
                     vender_btc()
-
                     precioguardado = precio_actual
                     en_dolares = True
                     ultima_operacion = time.time()
@@ -417,7 +687,6 @@ def main():
                     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     print(f"[{now_str}] ** Condiciones desfavorables. VENTA anticipada de BTC a ${precio_actual:.2f} **")
                     vender_btc()
-
                     precioguardado = precio_actual
                     en_dolares = True
                     ultima_operacion = time.time()
